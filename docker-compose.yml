@@ -43,7 +43,7 @@ services:
     ports:
       - "5090:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10

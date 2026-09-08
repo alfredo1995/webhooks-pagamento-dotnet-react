@@ -21,6 +21,10 @@ RUN dotnet publish src/Sabemi.Pagamentos.Api/Sabemi.Pagamentos.Api.csproj -c Rel
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
+# A imagem aspnet nao traz curl nem wget; sem um deles o HEALTHCHECK do compose
+# marcaria o container como unhealthy mesmo com a API respondendo.
+RUN apt-get update     && apt-get install -y --no-install-recommends curl     && rm -rf /var/lib/apt/lists/*
+
 USER $APP_UID
 
 COPY --from=build /app/publish .
