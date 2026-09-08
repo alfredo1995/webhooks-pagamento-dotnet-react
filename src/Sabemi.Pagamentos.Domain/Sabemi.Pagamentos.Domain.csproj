@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Camada de dominio: sem dependencia de framework, banco, fila ou web. -->
+
+</Project>

@@ -1,0 +1,4 @@
+# Arquivos gerados pelo `dotnet ef migrations add`: fora das regras de analise,
+# porque serao regerados e nao devem ser editados a mao.
+[*.cs]
+generated_code = true
