@@ -108,6 +108,23 @@ Os três scripts leem `WEBHOOK_API_KEY` e `WEBHOOK_SEGREDO` do mesmo `.env` que
 alimenta o compose. É o que faz a troca de segredo ser um lugar só: com a chave
 embutida no script, girar o segredo devolveria `401` sem nenhuma pista do motivo.
 
+### Limpar a base
+
+Depois de uma bateria de testes manuais o painel fica cheio de transação de
+ensaio. Para devolvê-lo a um estado apresentável, sem derrubar o banco nem
+reaplicar migrations:
+
+```bash
+./tools/limpar-base.sh              # zera tudo
+./tools/limpar-base.sh --erros      # só os eventos com erro e a dead-letter queue
+```
+
+No Windows, `./tools/limpar-base.ps1` e `./tools/limpar-base.ps1 -SomenteErros`.
+
+O modo `--erros` não toca no status dos contratos de propósito: falha de
+validação nunca chegou a mover saldo, e falha de processamento foi barrada antes
+de aplicar — zerar o consolidado ali inventaria uma correção que não aconteceu.
+
 ### Desenvolvimento local
 
 Fora do compose ninguém injeta as variáveis, então os segredos entram pelo
@@ -786,7 +803,7 @@ sabemi-webhooks/
 │       └── Middleware/                     # ProblemDetails
 ├── web/                                    # Painel React + TypeScript + Vite + Vitest
 ├── tests/
-├── tools/                                  # Envio assinado e carga dos segredos locais
+├── tools/                                  # Envio assinado, segredos locais e limpeza da base
 ├── .github/workflows/ci.yml
 ├── .env.example                            # Modelo das senhas e segredos (versionado)
 ├── .env                                    # Valores reais — fora do git
