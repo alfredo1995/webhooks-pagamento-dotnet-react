@@ -82,7 +82,13 @@ export function useAutoRefresh<T>(
     const timer = window.setInterval(() => void executar(), intervaloMs)
 
     return () => window.clearInterval(timer)
-  }, [executar, intervaloMs, ativo, habilitado])
+
+    // `buscar` entra nas dependencias para que trocar de consulta refaca a busca
+    // na hora. Sem ele, um filtro novo so valeria no proximo tick — e com a
+    // atualizacao automatica pausada, nunca: a tabela ficaria mostrando o
+    // resultado do filtro anterior sem nada indicando isso.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [executar, intervaloMs, ativo, habilitado, buscar])
 
   useEffect(() => () => controllerRef.current?.abort(), [])
 

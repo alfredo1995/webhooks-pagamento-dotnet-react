@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -17,5 +18,20 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+  },
+
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/testes/configuracao.ts'],
+    // Sem globais: cada teste importa o que usa. Custa duas linhas de import e
+    // evita que `expect` e `vi` aparecam do nada para quem le o arquivo.
+    globals: false,
+    restoreMocks: true,
+    css: false,
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/main.tsx', 'src/testes/**', 'src/**/*.test.{ts,tsx}'],
+    },
   },
 })

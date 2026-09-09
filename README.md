@@ -132,10 +132,11 @@ produção — o front usa caminhos relativos nos dois ambientes.
 ### Testes
 
 ```bash
-dotnet test
+dotnet test              # backend
+cd web && npm test       # painel
 ```
 
-Sem SDK instalado:
+Sem o SDK do .NET instalado:
 
 ```bash
 docker run --rm -v "${PWD}:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet test SabemiPagamentos.sln
@@ -640,11 +641,12 @@ forçar um a usar a convenção do outro.
 
 ## Testes
 
-**131 testes, todos verdes.**
+**277 testes, todos verdes.**
 
 ```
 Sabemi.Pagamentos.UnitTests ......... 84
 Sabemi.Pagamentos.IntegrationTests .. 47
+Painel (Vitest) ..................... 146
 ```
 
 ### Unitários
@@ -692,6 +694,32 @@ SQLite. Cobrem:
   combinação mista aceita, chave anterior fora da janela recusada e chave de outro
   parceiro recusada;
 - filtros, métricas, paginação e 404.
+
+### Painel
+
+Vitest com Testing Library e jsdom, consultando a tela como o operador a usa —
+por papel acessível e texto visível, não por classe CSS. A API é dublada na
+fronteira do `client`, então o que se verifica é o comportamento, não o
+`fetch`.
+
+Os testes de jornada em `App.test.tsx` são o único nível que prova que **o filtro
+digitado na tela vira consulta enviada**: os testes de componente sabem que o
+callback foi chamado, não que alguém o ligou na requisição. Cobrem login, sessão
+reaproveitada, filtro por status, filtro por contrato, alerta de erro com
+atalhos, troca de abas, paginação, reprocessamento da DLQ, saída e o operador
+que não enxerga a auditoria — nem dispara a consulta dela.
+
+Os demais cobrem o cliente HTTP (token, 401 com e sem sessão, `ProblemDetails`,
+montagem da query), o `useAutoRefresh` (intervalo, pausa, aborto da requisição
+anterior, erro sem apagar a tela), a sessão em `sessionStorage`, os formatadores
+e cada tabela.
+
+Um deles nasceu de um defeito encontrado ao escrevê-los: o `useAutoRefresh`
+guardava a função de busca em um `ref` e o efeito não dependia dela, então um
+filtro novo só valia no tique seguinte — e com a atualização automática pausada,
+**nunca**. A tabela seguia mostrando o resultado do filtro anterior sem nada na
+tela indicando isso. O teste que prova o conserto está em
+`useAutoRefresh.test.ts`.
 
 ---
 
@@ -756,7 +784,7 @@ sabemi-webhooks/
 │       ├── Observabilidade/                # Composição do OpenTelemetry
 │       ├── Controllers/                    # Webhook, painel, DLQ, auditoria, login
 │       └── Middleware/                     # ProblemDetails
-├── web/                                    # Painel React + TypeScript + Vite
+├── web/                                    # Painel React + TypeScript + Vite + Vitest
 ├── tests/
 ├── tools/                                  # Envio assinado e carga dos segredos locais
 ├── .github/workflows/ci.yml
