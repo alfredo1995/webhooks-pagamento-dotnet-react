@@ -146,7 +146,7 @@ Sem RabbitMQ no ar, o padrão do `appsettings.json` é a fila em memória
 O Vite faz proxy de `/api` para a API, o mesmo papel que o nginx cumpre em
 produção — o front usa caminhos relativos nos dois ambientes.
 
-### Testes
+### Testes e verificação
 
 ```bash
 dotnet test              # backend
@@ -158,6 +158,26 @@ Sem o SDK do .NET instalado:
 ```bash
 docker run --rm -v "${PWD}:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet test SabemiPagamentos.sln
 ```
+
+Para rodar a bateria inteira de uma vez — as mesmas seis etapas do arquivo de
+CI, na mesma configuração `Release`:
+
+```bash
+./tools/verificar.sh              # ou ./tools/verificar.ps1 no Windows
+./tools/verificar.sh --rapido     # pula o build das imagens Docker
+```
+
+O script detecta se o SDK do .NET está instalado e, quando não está, roda os
+testes no contêiner oficial. Termina com código de saída diferente de zero se
+qualquer etapa falhar, então serve como *pre-push hook*.
+
+> **Sobre o CI.** O workflow em `.github/workflows/ci.yml` está configurado como
+> `workflow_dispatch` — sob demanda, e não a cada push. A conta que hospeda este
+> repositório está com os GitHub Actions bloqueados por uma pendência de
+> cobrança, e um job que nunca chega a receber runner marcaria todo commit com um
+> ✗ que descreve a conta, não o código. O `verificar.sh` executa exatamente as
+> mesmas etapas. Para voltar ao gatilho automático, basta devolver `push` e
+> `pull_request` ao `on:` do workflow.
 
 ---
 
@@ -803,7 +823,7 @@ sabemi-webhooks/
 │       └── Middleware/                     # ProblemDetails
 ├── web/                                    # Painel React + TypeScript + Vite + Vitest
 ├── tests/
-├── tools/                                  # Envio assinado, segredos locais e limpeza da base
+├── tools/                                  # Envio assinado, segredos, limpeza da base e verificação
 ├── .github/workflows/ci.yml
 ├── .env.example                            # Modelo das senhas e segredos (versionado)
 ├── .env                                    # Valores reais — fora do git

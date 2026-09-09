@@ -1,10 +1,13 @@
 name: CI
 
+# Sob demanda, e nao a cada push: a conta que hospeda o repositorio esta com os
+# Actions bloqueados, e um job que nunca chega a receber runner marca todo commit
+# com um X vermelho que descreve a conta, nao o codigo. A bateria continua sendo
+# rodada — por ./tools/verificar.sh, que executa exatamente as mesmas etapas
+# desta pipeline na maquina de quem desenvolve. Para voltar ao gatilho
+# automatico, e so devolver `push` e `pull_request` aqui.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   backend:
