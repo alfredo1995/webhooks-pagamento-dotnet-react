@@ -7,6 +7,14 @@ set -euo pipefail
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENVIAR="$RAIZ/enviar-webhook.sh"
 
+# Mesmo .env do compose: o passo 3 monta o corpo na mao e precisa do segredo.
+if [[ -f "$RAIZ/../.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$RAIZ/../.env"
+  set +a
+fi
+
 API=${API:-http://localhost:5090}
 export API
 
@@ -25,10 +33,10 @@ echo "   reenviando a mesma id_transacao..."
 echo
 echo "=== 3. Payload invalido (fica visivel no painel como erro) ==="
 CORPO='{"id_transacao":"TX-INVALIDA-'"$(date +%s)"'","id_contrato":"","valor":-5,"status":"NAO-EXISTE"}'
-ASSINATURA="sha256=$(printf '%s' "$CORPO" | openssl dgst -sha256 -hmac "${SEGREDO:-segredo-hmac-de-desenvolvimento}" -hex | awk '{print $NF}')"
+ASSINATURA="sha256=$(printf '%s' "$CORPO" | openssl dgst -sha256 -hmac "${SEGREDO:-${WEBHOOK_SEGREDO}}" -hex | awk '{print $NF}')"
 curl -sS -w "   HTTP %{http_code}\n" -X POST "$API/webhooks/pagamento" \
   -H "Content-Type: application/json" \
-  -H "X-Api-Key: ${API_KEY:-sabemi-dev-api-key}" \
+  -H "X-Api-Key: ${API_KEY:-${WEBHOOK_API_KEY}}" \
   -H "X-Signature: $ASSINATURA" \
   -d "$CORPO"
 echo

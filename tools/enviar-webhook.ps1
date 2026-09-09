@@ -16,11 +16,28 @@ param(
     [ValidateSet("CONFIRMADO", "PENDENTE", "FALHA", "ESTORNADO")]
     [string]$Status = "CONFIRMADO",
     [string]$Api = "http://localhost:5090",
-    [string]$ApiKey = "sabemi-dev-api-key",
-    [string]$Segredo = "segredo-hmac-de-desenvolvimento"
+    [string]$ApiKey,
+    [string]$Segredo
 )
 
 $ErrorActionPreference = "Stop"
+
+# As credenciais saem do mesmo .env que alimenta o compose: assim, trocar o
+# segredo em um lugar so nao deixa o script assinando com a chave antiga.
+$caminhoEnv = Join-Path (Split-Path $PSScriptRoot -Parent) ".env"
+if (Test-Path $caminhoEnv) {
+    Get-Content $caminhoEnv | ForEach-Object {
+        if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+            Set-Item -Path "env:$($Matches[1])" -Value $Matches[2].Trim('"').Trim()
+        }
+    }
+}
+
+if (-not $ApiKey) { $ApiKey = $env:WEBHOOK_API_KEY }
+if (-not $Segredo) { $Segredo = $env:WEBHOOK_SEGREDO }
+if (-not $ApiKey -or -not $Segredo) {
+    throw "Defina WEBHOOK_API_KEY e WEBHOOK_SEGREDO no .env (modelo em .env.example)."
+}
 
 $dataPagamento = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 $valorTexto = $Valor.ToString([System.Globalization.CultureInfo]::InvariantCulture)

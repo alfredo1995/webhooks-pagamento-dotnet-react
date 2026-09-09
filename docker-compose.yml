@@ -4,7 +4,7 @@ services:
     container_name: sabemi-sqlserver
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "Sabemi_dev_123"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?defina no .env}"
       MSSQL_PID: Developer
     ports:
       - "1434:1433"
@@ -21,6 +21,37 @@ services:
       retries: 12
       start_period: 20s
 
+  # Fila distribuida: e o que permite rodar mais de uma instancia da API sem que
+  # duas processem o mesmo evento. Com uma instancia so, a fila em memoria basta
+  # (Processamento__Fila=Memoria) e este servico pode ficar de fora.
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: sabemi-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_USER:?defina no .env}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASS:?defina no .env}"
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # Coletor e visualizador de traces. E aqui que se ve a jornada inteira de um
+  # webhook: a requisicao do banco, a publicacao no outbox, o consumo na fila e
+  # o processamento em background, tudo em um trace so.
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    container_name: sabemi-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+
   api:
     build:
       context: .
@@ -29,17 +60,44 @@ services:
     depends_on:
       sqlserver:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__SqlServer: "Server=sqlserver,1433;Database=SabemiPagamentos;User Id=sa;Password=Sabemi_dev_123;TrustServerCertificate=True;Encrypt=False"
+      ConnectionStrings__SqlServer: "Server=sqlserver,1433;Database=SabemiPagamentos;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True;Encrypt=False"
       Database__MigrarNoStartup: "true"
+
       # 2 segundos de regra "pesada", como pede o desafio.
       Processamento__AtrasoSimuladoMs: "2000"
       Processamento__Concorrencia: "4"
+      Processamento__Fila: "RabbitMq"
+      Processamento__RabbitMq__Host: "rabbitmq"
+      Processamento__RabbitMq__Usuario: "${RABBITMQ_USER}"
+      Processamento__RabbitMq__Senha: "${RABBITMQ_PASS}"
+      Processamento__Retentativa__MaximoTentativas: "5"
+      Processamento__Retentativa__BackoffBaseSegundos: "5"
+      Processamento__LeaseProcessamentoSegundos: "120"
+
+      Observabilidade__EndpointOtlp: "http://jaeger:4317"
+
+      # Credenciais de demonstracao do painel, vindas do .env (modelo em
+      # .env.example). Em producao a secao inteira e substituida por
+      # Autenticacao__Authority apontando para o IdP corporativo.
+      Autenticacao__ChaveAssinatura: "${JWT_CHAVE_ASSINATURA:?defina no .env}"
+      Autenticacao__Usuarios__0__Login: "${PAINEL_OPERADOR_LOGIN}"
+      Autenticacao__Usuarios__0__Senha: "${PAINEL_OPERADOR_SENHA:?defina no .env}"
+      Autenticacao__Usuarios__0__Nome: "Operadora de Pagamentos"
+      Autenticacao__Usuarios__0__Papel: "operador"
+      Autenticacao__Usuarios__1__Login: "${PAINEL_ADMIN_LOGIN}"
+      Autenticacao__Usuarios__1__Senha: "${PAINEL_ADMIN_SENHA:?defina no .env}"
+      Autenticacao__Usuarios__1__Nome: "Administracao"
+      Autenticacao__Usuarios__1__Papel: "administrador"
+
       Webhook__ExigirAssinatura: "true"
       Webhook__Parceiros__0__Nome: "banco-parceiro"
-      Webhook__Parceiros__0__ApiKey: "sabemi-dev-api-key"
-      Webhook__Parceiros__0__Segredo: "segredo-hmac-de-desenvolvimento"
+      Webhook__Parceiros__0__ApiKey: "${WEBHOOK_API_KEY:?defina no .env}"
+      Webhook__Parceiros__0__Segredo: "${WEBHOOK_SEGREDO:?defina no .env}"
+      Webhook__Parceiros__0__LimitePorMinuto: "120"
     ports:
       - "5090:8080"
     healthcheck:
