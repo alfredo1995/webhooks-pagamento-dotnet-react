@@ -1,9 +1,9 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using Sabemi.Pagamentos.Application.Processamento;
 using Sabemi.Pagamentos.Application.Webhooks;
 using Sabemi.Pagamentos.Domain.Common;
 using Sabemi.Pagamentos.Domain.Eventos;
+using Sabemi.Pagamentos.Domain.Outbox;
 
 namespace Sabemi.Pagamentos.UnitTests.Aplicacao;
 
@@ -15,12 +15,12 @@ public class RecebimentoWebhookServiceTests
 {
     private readonly Mock<IEventoWebhookRepository> _eventos = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
-    private readonly Mock<IFilaProcessamento> _fila = new();
+    private readonly Mock<IOutboxRepository> _outbox = new();
 
     private RecebimentoWebhookService CriarServico() => new(
         _eventos.Object,
+        _outbox.Object,
         _unitOfWork.Object,
-        _fila.Object,
         new PagamentoWebhookValidator(),
         NullLogger<RecebimentoWebhookService>.Instance);
 
@@ -36,7 +36,7 @@ public class RecebimentoWebhookServiceTests
     private const string Bruto = """{"id_transacao":"TX-1","id_contrato":"CT-99","valor":250.00,"status":"CONFIRMADO"}""";
 
     [Fact]
-    public async Task ReceberAsync_ComPayloadValido_AceitaGravaEEnfileira()
+    public async Task ReceberAsync_ComPayloadValido_AceitaGravaEAnunciaNoOutbox()
     {
         var resposta = await CriarServico().ReceberAsync(PayloadValido(), Bruto, "banco-parceiro");
 
@@ -45,11 +45,13 @@ public class RecebimentoWebhookServiceTests
 
         _eventos.Verify(r => r.AdicionarAsync(It.IsAny<EventoWebhook>(), It.IsAny<CancellationToken>()), Times.Once);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
-        _fila.Verify(f => f.EnfileirarAsync(resposta.EventoId, It.IsAny<CancellationToken>()), Times.Once);
+        _outbox.Verify(
+            o => o.AdicionarAsync(It.Is<MensagemOutbox>(m => m.EventoId == resposta.EventoId), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
-    public async Task ReceberAsync_ComTransacaoJaRecebida_NaoGravaNemEnfileira()
+    public async Task ReceberAsync_ComTransacaoJaRecebida_NaoGravaNemAnuncia()
     {
         var existente = EventoWebhook.Registrar("TX-1", Bruto, "banco-parceiro");
         _eventos
@@ -63,11 +65,13 @@ public class RecebimentoWebhookServiceTests
 
         _eventos.Verify(r => r.AdicionarAsync(It.IsAny<EventoWebhook>(), It.IsAny<CancellationToken>()), Times.Never);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
-        _fila.Verify(f => f.EnfileirarAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        _outbox.Verify(
+            o => o.AdicionarAsync(It.IsAny<MensagemOutbox>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
-    public async Task ReceberAsync_QuandoOIndiceUnicoAcusaCorrida_TrataComoDuplicadoENaoEnfileira()
+    public async Task ReceberAsync_QuandoOIndiceUnicoAcusaCorrida_TrataComoDuplicado()
     {
         // Duas entregas simultaneas passam pela consulta antes de qualquer uma
         // gravar: quem perde a corrida recebe a violacao do indice unico.
@@ -85,11 +89,16 @@ public class RecebimentoWebhookServiceTests
 
         resposta.Resultado.Should().Be(ResultadoRecebimento.Duplicado);
         resposta.EventoId.Should().Be(vencedor.Id);
-        _fila.Verify(f => f.EnfileirarAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        // O anuncio foi preparado junto do evento, e nao depois dele: como os
+        // dois estao na mesma transacao, a recusa do indice unico desfaz o par.
+        // E exatamente isso que o outbox compra — nunca existe mensagem na fila
+        // para um evento que o banco nao aceitou.
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task ReceberAsync_ComPayloadInvalido_GravaOEventoComoInvalidoENaoEnfileira()
+    public async Task ReceberAsync_ComPayloadInvalido_GravaOEventoComoInvalidoENaoAnuncia()
     {
         EventoWebhook? gravado = null;
         _eventos
@@ -117,7 +126,9 @@ public class RecebimentoWebhookServiceTests
         gravado.PayloadBruto.Should().Be(Bruto);
 
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
-        _fila.Verify(f => f.EnfileirarAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        _outbox.Verify(
+            o => o.AdicionarAsync(It.IsAny<MensagemOutbox>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]

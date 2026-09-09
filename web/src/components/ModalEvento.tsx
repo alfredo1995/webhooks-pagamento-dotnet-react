@@ -92,6 +92,10 @@ export function ModalEvento({ evento, aoFechar }: Props) {
             <dd>{evento.tentativas}</dd>
           </div>
           <div>
+            <dt>Próxima tentativa</dt>
+            <dd>{formatarDataHora(evento.proximaTentativaEmUtc)}</dd>
+          </div>
+          <div>
             <dt>Parceiro</dt>
             <dd>{evento.origemParceiro}</dd>
           </div>

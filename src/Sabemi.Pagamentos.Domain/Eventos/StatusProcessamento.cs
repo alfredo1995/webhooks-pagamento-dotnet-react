@@ -4,15 +4,16 @@ namespace Sabemi.Pagamentos.Domain.Eventos;
 /// Estado do evento dentro do pipeline de recebimento.
 /// </summary>
 /// <remarks>
-/// <para><see cref="Recebido"/> — gravado no log bruto e enfileirado.</para>
-/// <para><see cref="Processando"/> — retirado da fila pelo worker.</para>
+/// <para><see cref="Recebido"/> — gravado no log bruto e anunciado no outbox.</para>
+/// <para><see cref="Processando"/> — reivindicado por um worker.</para>
 /// <para><see cref="Processado"/> — regra de negocio aplicada com sucesso.</para>
 /// <para><see cref="Invalido"/> — reprovado na validacao; nunca chegou a entrar na fila.</para>
-/// <para><see cref="Falha"/> — entrou na fila e quebrou durante o processamento.</para>
+/// <para><see cref="AguardandoRetentativa"/> — quebrou no processamento e tem nova tentativa agendada.</para>
+/// <para><see cref="Falha"/> — esgotou as tentativas; parou na dead-letter queue.</para>
 /// <para>
 /// <see cref="Invalido"/> e <see cref="Falha"/> existem separados de proposito: o
 /// primeiro e culpa do payload e nao adianta reprocessar; o segundo e falha de
-/// execucao e e candidato a retentativa.
+/// execucao que ja foi retentada automaticamente e continuou quebrando.
 /// </para>
 /// </remarks>
 public enum StatusProcessamento
@@ -22,6 +23,7 @@ public enum StatusProcessamento
     Processado = 3,
     Invalido = 4,
     Falha = 5,
+    AguardandoRetentativa = 6,
 }
 
 /// <summary>Agrupamento usado pelos filtros do painel administrativo.</summary>
@@ -34,6 +36,11 @@ public enum ResultadoEvento
 
 public static class StatusProcessamentoExtensions
 {
+    /// <summary>
+    /// Evento em retentativa conta como pendente, nao como erro: ele ainda tem
+    /// chance de terminar bem, e classifica-lo como erro encheria o alerta do
+    /// painel de falhas que o proprio sistema esta resolvendo sozinho.
+    /// </summary>
     public static ResultadoEvento ParaResultado(this StatusProcessamento status) => status switch
     {
         StatusProcessamento.Processado => ResultadoEvento.Sucesso,
@@ -45,6 +52,11 @@ public static class StatusProcessamentoExtensions
     {
         ResultadoEvento.Sucesso => [StatusProcessamento.Processado],
         ResultadoEvento.Erro => [StatusProcessamento.Invalido, StatusProcessamento.Falha],
-        _ => [StatusProcessamento.Recebido, StatusProcessamento.Processando],
+        _ =>
+        [
+            StatusProcessamento.Recebido,
+            StatusProcessamento.Processando,
+            StatusProcessamento.AguardandoRetentativa,
+        ],
     };
 }

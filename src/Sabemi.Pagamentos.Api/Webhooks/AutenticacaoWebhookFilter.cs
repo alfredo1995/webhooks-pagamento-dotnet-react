@@ -18,6 +18,11 @@ namespace Sabemi.Pagamentos.Api.Webhooks;
 /// em todo request e vaza em qualquer log de header mal configurado.
 /// </para>
 /// <para>
+/// Durante a janela de rotacao as duas geracoes de chave sao aceitas, e o uso da
+/// anterior sai no log como aviso. E o que torna a troca de segredo uma operacao
+/// rotineira em vez de uma parada combinada com o parceiro.
+/// </para>
+/// <para>
 /// Requisicao nao autenticada nao e gravada no log de eventos: o log existe para
 /// auditar o parceiro, e aceitar corpo de origem desconhecida transformaria a
 /// tabela em vetor de inundacao.
@@ -25,6 +30,7 @@ namespace Sabemi.Pagamentos.Api.Webhooks;
 /// </remarks>
 public sealed partial class AutenticacaoWebhookFilter(
     IOptions<OpcoesWebhook> opcoes,
+    TimeProvider relogio,
     ILogger<AutenticacaoWebhookFilter> logger) : IAsyncResourceFilter
 {
     public const string HeaderApiKey = "X-Api-Key";
@@ -51,8 +57,9 @@ public sealed partial class AutenticacaoWebhookFilter(
 
         request.Body.Position = 0;
 
+        var agora = relogio.GetUtcNow().UtcDateTime;
         var apiKey = request.Headers[HeaderApiKey].ToString();
-        var parceiro = LocalizarParceiro(apiKey);
+        var (parceiro, apiKeyAnterior) = LocalizarParceiro(apiKey, agora);
 
         if (parceiro is null)
         {
@@ -62,11 +69,26 @@ public sealed partial class AutenticacaoWebhookFilter(
             return;
         }
 
+        if (apiKeyAnterior)
+        {
+            LogChaveAnterior(logger, parceiro.Nome, "ApiKey", parceiro.ChavesAnterioresValidasAte ?? agora);
+        }
+
         if (_opcoes.ExigirAssinatura)
         {
             var assinatura = request.Headers[HeaderAssinatura].ToString();
+            var confere = CalculadoraAssinatura.Conferir(corpo, parceiro.Segredo, assinatura);
 
-            if (!CalculadoraAssinatura.Conferir(corpo, parceiro.Segredo, assinatura))
+            if (!confere
+                && parceiro.JanelaDeRotacaoAberta(agora)
+                && !string.IsNullOrEmpty(parceiro.SegredoAnterior)
+                && CalculadoraAssinatura.Conferir(corpo, parceiro.SegredoAnterior, assinatura))
+            {
+                confere = true;
+                LogChaveAnterior(logger, parceiro.Nome, "Segredo", parceiro.ChavesAnterioresValidasAte ?? agora);
+            }
+
+            if (!confere)
             {
                 LogAssinaturaInvalida(logger, parceiro.Nome);
                 context.Result = Recusar("Assinatura invalida para o corpo enviado.");
@@ -81,30 +103,49 @@ public sealed partial class AutenticacaoWebhookFilter(
         await next();
     }
 
-    private ParceiroWebhook? LocalizarParceiro(string apiKeyRecebida)
+    /// <summary>
+    /// Encontra o parceiro dono da ApiKey, aceitando a chave anterior enquanto a
+    /// janela de rotacao estiver aberta.
+    /// </summary>
+    /// <remarks>
+    /// Percorre todos os parceiros mesmo depois de achar, e compara em tempo
+    /// constante: sem isso, o tempo de resposta revelaria a posicao da chave na
+    /// lista e quantos caracteres dela estao corretos.
+    /// </remarks>
+    private (ParceiroWebhook? Parceiro, bool UsouChaveAnterior) LocalizarParceiro(string apiKeyRecebida, DateTime agoraUtc)
     {
         if (string.IsNullOrWhiteSpace(apiKeyRecebida))
         {
-            return null;
+            return (null, false);
         }
 
         var recebida = Encoding.UTF8.GetBytes(apiKeyRecebida.Trim());
 
-        // Percorre todos os parceiros mesmo apos achar: evita que o tempo de
-        // resposta revele a posicao da chave na lista.
         ParceiroWebhook? encontrado = null;
+        var usouAnterior = false;
+
         foreach (var parceiro in _opcoes.Parceiros)
         {
-            var esperada = Encoding.UTF8.GetBytes(parceiro.ApiKey ?? string.Empty);
-
-            if (CryptographicOperations.FixedTimeEquals(esperada, recebida))
+            if (Confere(parceiro.ApiKey, recebida))
             {
                 encontrado = parceiro;
+                usouAnterior = false;
+
+                continue;
+            }
+
+            if (parceiro.JanelaDeRotacaoAberta(agoraUtc) && Confere(parceiro.ApiKeyAnterior, recebida))
+            {
+                encontrado = parceiro;
+                usouAnterior = true;
             }
         }
 
-        return encontrado;
+        return (encontrado, usouAnterior);
     }
+
+    private static bool Confere(string? esperada, byte[] recebida)
+        => CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(esperada ?? string.Empty), recebida);
 
     private static ObjectResult Recusar(string detalhe) => new(new ProblemDetails
     {
@@ -123,4 +164,8 @@ public sealed partial class AutenticacaoWebhookFilter(
     [LoggerMessage(EventId = 4002, Level = LogLevel.Warning,
         Message = "Webhook recusado: assinatura invalida. parceiro={Parceiro}")]
     private static partial void LogAssinaturaInvalida(ILogger logger, string parceiro);
+
+    [LoggerMessage(EventId = 4003, Level = LogLevel.Warning,
+        Message = "Parceiro ainda usa a chave anterior. parceiro={Parceiro} chave={Chave} janela_ate={JanelaAte:O}")]
+    private static partial void LogChaveAnterior(ILogger logger, string parceiro, string chave, DateTime janelaAte);
 }

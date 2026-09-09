@@ -3,18 +3,17 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Sabemi.Pagamentos.Application.Processamento;
-using Sabemi.Pagamentos.Domain.Eventos;
 
 namespace Sabemi.Pagamentos.Infrastructure.Processamento;
 
 /// <summary>
-/// Consome a fila fora do ciclo da requisicao HTTP.
+/// Consome a fila em memoria fora do ciclo da requisicao HTTP.
 /// </summary>
 /// <remarks>
 /// Cada evento roda em seu proprio escopo de DI, porque o <c>DbContext</c> e
-/// scoped e nao pode ser compartilhado entre processamentos concorrentes.
-/// Antes de comecar a consumir, o worker reenfileira o que ficou pendente de uma
-/// execucao anterior — e o que fecha o ciclo de durabilidade da fila em memoria.
+/// scoped e nao pode ser compartilhado entre processamentos concorrentes. Quem
+/// devolve para a fila o que ficou sem desfecho e o supervisor, nao este worker:
+/// recuperacao e responsabilidade de um so lugar.
 /// </remarks>
 public sealed partial class WorkerProcessamento(
     FilaProcessamentoEmMemoria fila,
@@ -22,17 +21,10 @@ public sealed partial class WorkerProcessamento(
     IOptions<OpcoesProcessamento> opcoes,
     ILogger<WorkerProcessamento> logger) : BackgroundService
 {
-    private const int LimiteRecuperacao = 500;
-
     private readonly OpcoesProcessamento _opcoes = opcoes.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (_opcoes.RecuperarPendentesNoStartup)
-        {
-            await RecuperarPendentesAsync(stoppingToken);
-        }
-
         LogIniciado(logger, _opcoes.Concorrencia, _opcoes.AtrasoSimuladoMs);
 
         var consumidores = Enumerable
@@ -53,11 +45,11 @@ public sealed partial class WorkerProcessamento(
     {
         try
         {
-            await foreach (var eventoId in fila.LerAsync(stoppingToken))
+            await foreach (var mensagem in fila.LerAsync(stoppingToken))
             {
                 fila.ConfirmarRetirada();
 
-                await ProcessarComEscopoAsync(eventoId, stoppingToken);
+                await ProcessarComEscopoAsync(mensagem, stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -66,7 +58,7 @@ public sealed partial class WorkerProcessamento(
         }
     }
 
-    private async Task ProcessarComEscopoAsync(Guid eventoId, CancellationToken stoppingToken)
+    private async Task ProcessarComEscopoAsync(MensagemProcessamento mensagem, CancellationToken stoppingToken)
     {
         using var escopo = escopos.CreateScope();
 
@@ -74,7 +66,7 @@ public sealed partial class WorkerProcessamento(
         {
             var processador = escopo.ServiceProvider.GetRequiredService<IProcessadorPagamento>();
 
-            await processador.ProcessarAsync(eventoId, stoppingToken);
+            await processador.ProcessarAsync(mensagem, stoppingToken);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -82,38 +74,16 @@ public sealed partial class WorkerProcessamento(
         }
         catch (Exception excecao)
         {
-            // O processador ja registra falha de negocio no proprio evento.
-            // Chegar aqui significa erro fora dele (infra, DI); o worker nao pode morrer por isso.
-            LogErroInesperado(logger, excecao, eventoId);
+            // O processador ja trata falha de negocio no proprio evento. Chegar
+            // aqui significa erro fora dele (infra, DI); o worker nao pode morrer
+            // por isso, e o lease devolve o evento para a fila mais tarde.
+            LogErroInesperado(logger, excecao, mensagem.EventoId);
         }
-    }
-
-    private async Task RecuperarPendentesAsync(CancellationToken stoppingToken)
-    {
-        using var escopo = escopos.CreateScope();
-        var repositorio = escopo.ServiceProvider.GetRequiredService<IEventoWebhookRepository>();
-
-        var pendentes = await repositorio.ObterPendentesAsync(LimiteRecuperacao, stoppingToken);
-        if (pendentes.Count == 0)
-        {
-            return;
-        }
-
-        foreach (var eventoId in pendentes)
-        {
-            await fila.EnfileirarAsync(eventoId, stoppingToken);
-        }
-
-        LogRecuperados(logger, pendentes.Count);
     }
 
     [LoggerMessage(EventId = 3001, Level = LogLevel.Information,
         Message = "Worker de processamento iniciado. concorrencia={Concorrencia} atraso_simulado_ms={AtrasoMs}")]
     private static partial void LogIniciado(ILogger logger, int concorrencia, int atrasoMs);
-
-    [LoggerMessage(EventId = 3002, Level = LogLevel.Information,
-        Message = "{Total} evento(s) pendente(s) reenfileirado(s) no startup.")]
-    private static partial void LogRecuperados(ILogger logger, int total);
 
     [LoggerMessage(EventId = 3003, Level = LogLevel.Error,
         Message = "Erro inesperado fora do processador ao tratar o evento {EventoId}.")]

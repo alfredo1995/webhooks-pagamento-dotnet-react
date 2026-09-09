@@ -6,6 +6,7 @@ const rotulos: Record<StatusProcessamento, string> = {
   Processado: 'Processado',
   Invalido: 'Inválido',
   Falha: 'Falha',
+  AguardandoRetentativa: 'Em retentativa',
 }
 
 /**

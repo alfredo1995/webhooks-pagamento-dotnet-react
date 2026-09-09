@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Sabemi.Pagamentos.Api.Seguranca;
 using Sabemi.Pagamentos.Api.Webhooks;
 using Sabemi.Pagamentos.Application.Webhooks;
 
@@ -32,11 +34,13 @@ public sealed class WebhooksController(IRecebimentoWebhookService recebimento) :
     /// aparece no painel — e <c>401</c> quando ApiKey ou assinatura nao conferem.
     /// </remarks>
     [HttpPost("pagamento")]
+    [EnableRateLimiting(RateLimitingWebhook.Politica)]
     [ServiceFilter(typeof(AutenticacaoWebhookFilter))]
     [ProducesResponseType(typeof(RespostaWebhook), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(RespostaWebhook), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(RespostaWebhook), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> Pagamento(CancellationToken cancellationToken)
     {
         var corpo = HttpContext.Items[AutenticacaoWebhookFilter.ItemPayloadBruto] as string ?? string.Empty;

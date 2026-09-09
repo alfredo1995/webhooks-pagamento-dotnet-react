@@ -7,7 +7,17 @@ public class EventoWebhookTests
 {
     private const string Payload = """{"id_transacao":"TX-1"}""";
 
+    private static readonly TimeSpan Lease = TimeSpan.FromMinutes(2);
+
     private static EventoWebhook NovoEvento() => EventoWebhook.Registrar("TX-1", Payload, "banco-parceiro");
+
+    private static EventoWebhook EmProcessamento(DateTime? agora = null)
+    {
+        var evento = NovoEvento();
+        evento.Reivindicar(agora ?? DateTime.UtcNow, Lease);
+
+        return evento;
+    }
 
     [Fact]
     public void Registrar_GuardaPayloadBrutoIntactoENasceComoRecebido()
@@ -70,11 +80,10 @@ public class EventoWebhookTests
     }
 
     [Fact]
-    public void CicloFeliz_IniciarEConcluir_ContaTentativaERegistraDuracao()
+    public void CicloFeliz_ReivindicarEConcluir_ContaTentativaERegistraDuracao()
     {
-        var evento = NovoEvento();
+        var evento = EmProcessamento();
 
-        evento.IniciarProcessamento();
         evento.Status.Should().Be(StatusProcessamento.Processando);
         evento.Tentativas.Should().Be(1);
 
@@ -84,6 +93,7 @@ public class EventoWebhookTests
         evento.Resultado().Should().Be(ResultadoEvento.Sucesso);
         evento.DuracaoProcessamentoMs.Should().Be(2013);
         evento.ProcessadoEmUtc.Should().NotBeNull();
+        evento.ReivindicadoEmUtc.Should().BeNull();
     }
 
     [Fact]
@@ -97,30 +107,89 @@ public class EventoWebhookTests
     }
 
     [Fact]
-    public void IniciarProcessamento_ComEventoInvalido_LancaDomainException()
+    public void Reivindicar_ComEventoInvalido_LancaDomainException()
     {
         var evento = NovoEvento();
         evento.MarcarInvalido("payload ruim");
 
-        var acao = evento.IniciarProcessamento;
+        var acao = () => evento.Reivindicar(DateTime.UtcNow, Lease);
 
         acao.Should().Throw<DomainException>();
     }
 
     [Fact]
-    public void RegistrarFalha_PermiteNovaTentativa()
+    public void AgendarRetentativa_DevolveOEventoAFilaNoHorarioCombinado()
     {
-        var evento = NovoEvento();
-        evento.IniciarProcessamento();
-        evento.RegistrarFalha("timeout no parceiro", 900);
+        var agora = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        var evento = EmProcessamento(agora);
+
+        evento.AgendarRetentativa("timeout no parceiro", 900, agora.AddSeconds(5));
+
+        evento.Status.Should().Be(StatusProcessamento.AguardandoRetentativa);
+        evento.ProximaTentativaEmUtc.Should().Be(agora.AddSeconds(5));
+        evento.Concluido.Should().BeFalse();
+
+        // Evento em retentativa e pendente, nao erro: ele ainda pode terminar bem.
+        evento.Resultado().Should().Be(ResultadoEvento.Pendente);
+    }
+
+    [Fact]
+    public void PodeSerReivindicado_AntesDoHorarioDaRetentativa_Recusa()
+    {
+        var agora = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        var evento = EmProcessamento(agora);
+        evento.AgendarRetentativa("falhou", 10, agora.AddSeconds(30));
+
+        evento.PodeSerReivindicado(agora.AddSeconds(29), Lease).Should().BeFalse();
+        evento.PodeSerReivindicado(agora.AddSeconds(30), Lease).Should().BeTrue();
+    }
+
+    [Fact]
+    public void PodeSerReivindicado_ComLeaseVencido_DevolveOEventoTravadoEmProcessamento()
+    {
+        var agora = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        var evento = EmProcessamento(agora);
+
+        // A instancia que reivindicou caiu: enquanto o lease vale, ninguem mexe.
+        evento.PodeSerReivindicado(agora.Add(Lease).AddSeconds(-1), Lease).Should().BeFalse();
+        evento.PodeSerReivindicado(agora.Add(Lease), Lease).Should().BeTrue();
+    }
+
+    [Fact]
+    public void RegistrarFalha_EncerraOEventoComoErro()
+    {
+        var evento = EmProcessamento();
+
+        evento.RegistrarFalha("indisponibilidade permanente", 900);
 
         evento.Status.Should().Be(StatusProcessamento.Falha);
         evento.Resultado().Should().Be(ResultadoEvento.Erro);
+        evento.Concluido.Should().BeTrue();
+        evento.ProximaTentativaEmUtc.Should().BeNull();
+    }
 
-        evento.IniciarProcessamento();
+    [Fact]
+    public void ReabrirParaReprocessamento_ZeraOOrcamentoDeTentativas()
+    {
+        var evento = EmProcessamento();
+        evento.RegistrarFalha("quebrou", 10);
 
-        evento.Tentativas.Should().Be(2);
-        evento.Status.Should().Be(StatusProcessamento.Processando);
+        evento.ReabrirParaReprocessamento();
+
+        evento.Status.Should().Be(StatusProcessamento.Recebido);
+        evento.Tentativas.Should().Be(0);
+        evento.MotivoFalha.Should().BeNull();
+        evento.ProcessadoEmUtc.Should().BeNull();
+    }
+
+    [Fact]
+    public void ReabrirParaReprocessamento_ComEventoQueNaoFalhou_LancaDomainException()
+    {
+        var evento = NovoEvento();
+
+        var acao = evento.ReabrirParaReprocessamento;
+
+        acao.Should().Throw<DomainException>().WithMessage("*Falha*");
     }
 
     [Fact]

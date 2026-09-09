@@ -9,7 +9,7 @@ namespace Sabemi.Pagamentos.IntegrationTests;
 
 public class WebhookEndpointTests(ApiFactory fabrica) : IClassFixture<ApiFactory>
 {
-    private readonly HttpClient _cliente = fabrica.CreateClient();
+    private readonly HttpClient _cliente = fabrica.CriarClienteDoPainel(ApiFactory.Administrador);
 
     private static string Corpo(
         string idTransacao,

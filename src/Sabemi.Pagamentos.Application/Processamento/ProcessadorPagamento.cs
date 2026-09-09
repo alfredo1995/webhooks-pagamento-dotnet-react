@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Sabemi.Pagamentos.Application.Observabilidade;
 using Sabemi.Pagamentos.Domain.Common;
 using Sabemi.Pagamentos.Domain.Contratos;
 using Sabemi.Pagamentos.Domain.Eventos;
@@ -9,43 +10,67 @@ namespace Sabemi.Pagamentos.Application.Processamento;
 
 public interface IProcessadorPagamento
 {
-    Task ProcessarAsync(Guid eventoId, CancellationToken cancellationToken = default);
+    Task ProcessarAsync(MensagemProcessamento mensagem, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
 /// A regra de negocio "pesada" que roda fora do ciclo da requisicao HTTP.
 /// </summary>
 /// <remarks>
-/// O metodo e idempotente por construcao: um evento ja processado e ignorado.
-/// Isso importa porque a fila pode reentregar o mesmo id — no restart da
-/// aplicacao, por exemplo, quando os pendentes sao reenfileirados.
+/// <para>
+/// Toda entrega comeca por uma reivindicacao atomica: um UPDATE condicional que
+/// so passa se o evento estiver reivindicavel. E dai que vem a idempotencia sob
+/// concorrencia — reentrega do broker, retentativa agendada e duas instancias
+/// consumindo a mesma fila caem todas no mesmo ponto, e apenas uma segue adiante.
+/// Conferir o status em memoria antes de gravar seria uma checagem com aparencia
+/// de garantia, do mesmo jeito que a consulta previa e no recebimento.
+/// </para>
+/// <para>
+/// O desfecho de uma falha depende do orcamento de tentativas: enquanto houver,
+/// o evento volta agendado com backoff; quando acaba, ele para em
+/// <see cref="StatusProcessamento.Falha"/> e ganha uma carta na dead-letter queue,
+/// de onde so sai por decisao humana.
+/// </para>
 /// </remarks>
 public sealed partial class ProcessadorPagamento(
     IEventoWebhookRepository eventos,
     IStatusContratoRepository contratos,
+    IDeadLetterRepository deadLetters,
     IUnitOfWork unitOfWork,
+    IPoliticaRetentativa politica,
     IOptions<OpcoesProcessamento> opcoes,
+    TimeProvider relogio,
     ILogger<ProcessadorPagamento> logger) : IProcessadorPagamento
 {
     private readonly OpcoesProcessamento _opcoes = opcoes.Value;
 
-    public async Task ProcessarAsync(Guid eventoId, CancellationToken cancellationToken = default)
+    public async Task ProcessarAsync(MensagemProcessamento mensagem, CancellationToken cancellationToken = default)
     {
-        var evento = await eventos.ObterPorIdAsync(eventoId, cancellationToken);
+        ArgumentNullException.ThrowIfNull(mensagem);
+
+        using var atividade = Telemetria.IniciarConsumo(
+            "processar-evento",
+            mensagem.TraceParent,
+            mensagem.TraceState);
+
+        atividade?.SetTag("sabemi.evento_id", mensagem.EventoId);
+
+        var agora = relogio.GetUtcNow().UtcDateTime;
+        var lease = TimeSpan.FromSeconds(Math.Max(1, _opcoes.LeaseProcessamentoSegundos));
+
+        var evento = await eventos.ReivindicarAsync(mensagem.EventoId, agora, lease, cancellationToken);
         if (evento is null)
         {
-            LogEventoInexistente(logger, eventoId);
+            // Outro consumidor chegou primeiro, o evento ja terminou ou a
+            // retentativa ainda nao venceu. Nos tres casos nao ha o que fazer.
+            LogEntregaIgnorada(logger, mensagem.EventoId);
+            atividade?.SetTag("sabemi.reivindicado", false);
+
             return;
         }
 
-        if (evento.Status is StatusProcessamento.Processado or StatusProcessamento.Invalido)
-        {
-            LogJaConcluido(logger, evento.IdTransacao, evento.Status.ToString());
-            return;
-        }
-
-        evento.IniciarProcessamento();
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        atividade?.SetTag("sabemi.id_transacao", evento.IdTransacao);
+        atividade?.SetTag("sabemi.tentativa", evento.Tentativas);
 
         var cronometro = Stopwatch.StartNew();
 
@@ -63,21 +88,57 @@ public sealed partial class ProcessadorPagamento(
             evento.ConcluirComSucesso(cronometro.ElapsedMilliseconds);
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
+            Telemetria.EventosProcessados.Add(1, new KeyValuePair<string, object?>("parceiro", evento.OrigemParceiro));
+            Telemetria.DuracaoProcessamento.Record(cronometro.Elapsed.TotalMilliseconds);
+
             LogProcessado(logger, evento.IdTransacao, cronometro.ElapsedMilliseconds);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Desligamento em andamento: nao marca falha, o evento volta como pendente.
+            // Desligamento em andamento: nao marca falha. O lease vence e o
+            // supervisor devolve o evento para a fila na proxima subida.
             throw;
         }
         catch (Exception excecao)
         {
             cronometro.Stop();
-            evento.RegistrarFalha(excecao.Message, cronometro.ElapsedMilliseconds);
+
+            await TratarFalhaAsync(evento, excecao, cronometro.ElapsedMilliseconds);
+
+            atividade?.SetStatus(ActivityStatusCode.Error, excecao.Message);
+        }
+    }
+
+    /// <summary>
+    /// Falhou: agenda a proxima tentativa enquanto houver orcamento, ou encerra
+    /// o evento e abre a carta na dead-letter queue quando ele acaba.
+    /// </summary>
+    private async Task TratarFalhaAsync(EventoWebhook evento, Exception excecao, long duracaoMs)
+    {
+        var etiqueta = new KeyValuePair<string, object?>("parceiro", evento.OrigemParceiro);
+
+        if (politica.PodeRetentar(evento.Tentativas))
+        {
+            var proxima = politica.CalcularProximaTentativa(
+                evento.Id,
+                evento.Tentativas,
+                relogio.GetUtcNow().UtcDateTime);
+
+            evento.AgendarRetentativa(excecao.Message, duracaoMs, proxima);
             await unitOfWork.SaveChangesAsync(CancellationToken.None);
 
-            LogFalha(logger, excecao, evento.IdTransacao, evento.Tentativas);
+            Telemetria.EventosRetentados.Add(1, etiqueta);
+            LogRetentativaAgendada(logger, excecao, evento.IdTransacao, evento.Tentativas, proxima);
+
+            return;
         }
+
+        evento.RegistrarFalha(excecao.Message, duracaoMs);
+        await deadLetters.AdicionarAsync(DeadLetter.DoEvento(evento), CancellationToken.None);
+        await unitOfWork.SaveChangesAsync(CancellationToken.None);
+
+        Telemetria.EventosEmDeadLetter.Add(1, etiqueta);
+        LogDeadLetter(logger, excecao, evento.IdTransacao, evento.Tentativas);
     }
 
     private async Task AplicarNoContratoAsync(EventoWebhook evento, CancellationToken cancellationToken)
@@ -106,15 +167,18 @@ public sealed partial class ProcessadorPagamento(
         Message = "Evento processado. id_transacao={IdTransacao} duracao_ms={DuracaoMs}")]
     private static partial void LogProcessado(ILogger logger, string idTransacao, long duracaoMs);
 
-    [LoggerMessage(EventId = 2002, Level = LogLevel.Error,
-        Message = "Falha ao processar evento. id_transacao={IdTransacao} tentativa={Tentativas}")]
-    private static partial void LogFalha(ILogger logger, Exception excecao, string idTransacao, int tentativas);
-
-    [LoggerMessage(EventId = 2003, Level = LogLevel.Warning,
-        Message = "Evento {EventoId} nao encontrado ao processar.")]
-    private static partial void LogEventoInexistente(ILogger logger, Guid eventoId);
+    [LoggerMessage(EventId = 2002, Level = LogLevel.Warning,
+        Message = "Falha ao processar evento; nova tentativa agendada. "
+                  + "id_transacao={IdTransacao} tentativa={Tentativas} proxima={Proxima:O}")]
+    private static partial void LogRetentativaAgendada(
+        ILogger logger, Exception excecao, string idTransacao, int tentativas, DateTime proxima);
 
     [LoggerMessage(EventId = 2004, Level = LogLevel.Debug,
-        Message = "Evento ja concluido, reentrega ignorada. id_transacao={IdTransacao} status={Status}")]
-    private static partial void LogJaConcluido(ILogger logger, string idTransacao, string status);
+        Message = "Entrega ignorada: evento {EventoId} nao estava reivindicavel.")]
+    private static partial void LogEntregaIgnorada(ILogger logger, Guid eventoId);
+
+    [LoggerMessage(EventId = 2005, Level = LogLevel.Error,
+        Message = "Evento esgotou as tentativas e foi para a dead-letter queue. "
+                  + "id_transacao={IdTransacao} tentativas={Tentativas}")]
+    private static partial void LogDeadLetter(ILogger logger, Exception excecao, string idTransacao, int tentativas);
 }

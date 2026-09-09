@@ -38,5 +38,10 @@ public sealed class EventoWebhookConfiguration : IEntityTypeConfiguration<Evento
         builder.HasIndex(e => e.Status).HasDatabaseName("IX_EventosWebhook_Status");
         builder.HasIndex(e => e.IdContrato).HasDatabaseName("IX_EventosWebhook_IdContrato");
         builder.HasIndex(e => e.RecebidoEmUtc).HasDatabaseName("IX_EventosWebhook_RecebidoEmUtc");
+
+        // O supervisor varre por status e data de elegibilidade a cada ciclo;
+        // sem este indice, cada varredura seria um scan da tabela inteira.
+        builder.HasIndex(e => new { e.Status, e.ProximaTentativaEmUtc })
+            .HasDatabaseName("IX_EventosWebhook_Status_ProximaTentativa");
     }
 }

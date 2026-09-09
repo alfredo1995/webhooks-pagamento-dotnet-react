@@ -130,7 +130,7 @@ body {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -479,7 +479,7 @@ body {
 
 .propriedades {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
   gap: 14px;
   margin: 0 0 20px;
 }
@@ -519,4 +519,81 @@ body {
   .campo input {
     min-width: 100%;
   }
+}
+
+/* ---------- Autenticação e identidade ---------- */
+
+.login {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.login__cartao {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px;
+  background: var(--superficie);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  box-shadow: var(--sombra);
+}
+
+.login__cartao h1 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.login__subtitulo {
+  margin: 0;
+  color: var(--texto-fraco);
+  font-size: 13px;
+}
+
+.cabecalho__acoes {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.identidade {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.identidade small {
+  color: var(--texto-fraco);
+  font-weight: 400;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.botao--primario {
+  background: var(--primaria);
+  border-color: var(--primaria);
+  color: #fff;
+  font-weight: 600;
+}
+
+.botao--primario:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Dois atalhos lado a lado quando o alerta cobre erro e dead-letter ao mesmo tempo. */
+.alerta__acoes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }

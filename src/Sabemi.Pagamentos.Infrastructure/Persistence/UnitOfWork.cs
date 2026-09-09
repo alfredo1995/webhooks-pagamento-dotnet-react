@@ -30,14 +30,23 @@ public sealed class UnitOfWork(AppDbContext context) : IUnitOfWork
                 .OfType<EventoWebhook>()
                 .FirstOrDefault();
 
-            // O contexto fica com a entidade recusada pendente; sem soltar,
-            // qualquer consulta seguinte tentaria grava-la de novo.
-            foreach (var entrada in excecao.Entries)
-            {
-                entrada.State = EntityState.Detached;
-            }
+            SoltarInsercoesPendentes();
 
             throw new TransacaoDuplicadaException(duplicado?.IdTransacao ?? "desconhecida", excecao);
+        }
+    }
+
+    /// <summary>
+    /// O <c>SaveChanges</c> e uma transacao so: quando o indice unico recusa o
+    /// evento, a mensagem de outbox que ia junto tambem foi desfeita. Soltar
+    /// todas as insercoes pendentes evita que uma gravacao seguinte no mesmo
+    /// escopo ressuscite metade de um par que o banco ja rejeitou.
+    /// </summary>
+    private void SoltarInsercoesPendentes()
+    {
+        foreach (var entrada in context.ChangeTracker.Entries().Where(e => e.State == EntityState.Added).ToList())
+        {
+            entrada.State = EntityState.Detached;
         }
     }
 

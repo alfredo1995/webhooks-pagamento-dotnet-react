@@ -22,6 +22,62 @@ namespace Sabemi.Pagamentos.Infrastructure.Persistence.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("Sabemi.Pagamentos.Domain.Auditoria.RegistroAuditoria", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Consulta")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateTime>("EmUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("IpOrigem")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Metodo")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("Papel")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Recurso")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<int>("StatusHttp")
+                        .HasColumnType("int");
+
+                    b.Property<string>("TraceId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Usuario")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmUtc")
+                        .HasDatabaseName("IX_RegistrosAuditoria_EmUtc");
+
+                    b.HasIndex("Usuario")
+                        .HasDatabaseName("IX_RegistrosAuditoria_Usuario");
+
+                    b.ToTable("RegistrosAuditoria", (string)null);
+                });
+
             modelBuilder.Entity("Sabemi.Pagamentos.Domain.Contratos.StatusContrato", b =>
                 {
                     b.Property<Guid>("Id")
@@ -73,6 +129,53 @@ namespace Sabemi.Pagamentos.Infrastructure.Persistence.Migrations
                     b.ToTable("StatusContratos", (string)null);
                 });
 
+            modelBuilder.Entity("Sabemi.Pagamentos.Domain.Eventos.DeadLetter", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CriadoEmUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EventoId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("IdContrato")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("IdTransacao")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Motivo")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime?>("ReprocessadoEmUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ReprocessadoPor")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("Tentativas")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EventoId")
+                        .HasDatabaseName("IX_DeadLetters_EventoId");
+
+                    b.HasIndex("ReprocessadoEmUtc")
+                        .HasDatabaseName("IX_DeadLetters_ReprocessadoEmUtc");
+
+                    b.ToTable("DeadLetters", (string)null);
+                });
+
             modelBuilder.Entity("Sabemi.Pagamentos.Domain.Eventos.EventoWebhook", b =>
                 {
                     b.Property<Guid>("Id")
@@ -110,7 +213,13 @@ namespace Sabemi.Pagamentos.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("ProcessadoEmUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<DateTime?>("ProximaTentativaEmUtc")
+                        .HasColumnType("datetime2");
+
                     b.Property<DateTime>("RecebidoEmUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ReivindicadoEmUtc")
                         .HasColumnType("datetime2");
 
                     b.Property<int>("Status")
@@ -141,7 +250,69 @@ namespace Sabemi.Pagamentos.Infrastructure.Persistence.Migrations
                     b.HasIndex("Status")
                         .HasDatabaseName("IX_EventosWebhook_Status");
 
+                    b.HasIndex("Status", "ProximaTentativaEmUtc")
+                        .HasDatabaseName("IX_EventosWebhook_Status_ProximaTentativa");
+
                     b.ToTable("EventosWebhook", (string)null);
+                });
+
+            modelBuilder.Entity("Sabemi.Pagamentos.Domain.Outbox.MensagemOutbox", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CriadaEmUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EventoId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("ProximaTentativaEmUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("PublicadaEmUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ReservaToken")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime?>("ReservadaAteUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("Tentativas")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Tipo")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("TraceParent")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("TraceState")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("UltimoErro")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EventoId")
+                        .HasDatabaseName("IX_MensagensOutbox_EventoId");
+
+                    b.HasIndex("ReservaToken")
+                        .HasDatabaseName("IX_MensagensOutbox_ReservaToken");
+
+                    b.HasIndex("PublicadaEmUtc", "ProximaTentativaEmUtc")
+                        .HasDatabaseName("IX_MensagensOutbox_Pendentes");
+
+                    b.ToTable("MensagensOutbox", (string)null);
                 });
 #pragma warning restore 612, 618
         }

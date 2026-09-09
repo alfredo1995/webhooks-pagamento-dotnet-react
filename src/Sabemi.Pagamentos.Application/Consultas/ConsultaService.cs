@@ -1,8 +1,10 @@
 using Sabemi.Pagamentos.Application.Common;
 using Sabemi.Pagamentos.Application.Processamento;
+using Sabemi.Pagamentos.Domain.Auditoria;
 using Sabemi.Pagamentos.Domain.Common;
 using Sabemi.Pagamentos.Domain.Contratos;
 using Sabemi.Pagamentos.Domain.Eventos;
+using Sabemi.Pagamentos.Domain.Outbox;
 
 namespace Sabemi.Pagamentos.Application.Consultas;
 
@@ -24,12 +26,28 @@ public interface IConsultaService
         int? tamanhoPagina,
         CancellationToken cancellationToken = default);
 
+    Task<PagedResult<DeadLetterResumo>> BuscarDeadLettersAsync(
+        bool apenasPendentes,
+        int? pagina,
+        int? tamanhoPagina,
+        CancellationToken cancellationToken = default);
+
+    Task<PagedResult<AuditoriaResumo>> BuscarAuditoriaAsync(
+        string? usuario,
+        string? recurso,
+        int? pagina,
+        int? tamanhoPagina,
+        CancellationToken cancellationToken = default);
+
     Task<Metricas> ObterMetricasAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed class ConsultaService(
     IEventoWebhookRepository eventos,
     IStatusContratoRepository contratos,
+    IDeadLetterRepository deadLetters,
+    IOutboxRepository outbox,
+    IAuditoriaRepository auditoria,
     IFilaProcessamento fila) : IConsultaService
 {
     public async Task<PagedResult<EventoResumo>> BuscarEventosAsync(
@@ -42,7 +60,7 @@ public sealed class ConsultaService(
     {
         var (p, tamanho) = Paginacao.Normalizar(pagina, tamanhoPagina);
 
-        var pagina0 = await eventos.BuscarAsync(
+        var encontrados = await eventos.BuscarAsync(
             ConverterResultado(resultado),
             idContrato,
             idTransacao,
@@ -51,10 +69,10 @@ public sealed class ConsultaService(
             cancellationToken);
 
         return new PagedResult<EventoResumo>(
-            pagina0.Itens.Select(e => e.ParaResumo()).ToList(),
-            pagina0.Pagina,
-            pagina0.TamanhoPagina,
-            pagina0.TotalItens);
+            encontrados.Itens.Select(e => e.ParaResumo()).ToList(),
+            encontrados.Pagina,
+            encontrados.TamanhoPagina,
+            encontrados.TotalItens);
     }
 
     public async Task<EventoDetalhe> ObterEventoAsync(Guid id, CancellationToken cancellationToken = default)
@@ -82,6 +100,41 @@ public sealed class ConsultaService(
             resultado.TotalItens);
     }
 
+    public async Task<PagedResult<DeadLetterResumo>> BuscarDeadLettersAsync(
+        bool apenasPendentes,
+        int? pagina,
+        int? tamanhoPagina,
+        CancellationToken cancellationToken = default)
+    {
+        var (p, tamanho) = Paginacao.Normalizar(pagina, tamanhoPagina);
+
+        var resultado = await deadLetters.BuscarAsync(apenasPendentes, p, tamanho, cancellationToken);
+
+        return new PagedResult<DeadLetterResumo>(
+            resultado.Itens.Select(c => c.ParaResumo()).ToList(),
+            resultado.Pagina,
+            resultado.TamanhoPagina,
+            resultado.TotalItens);
+    }
+
+    public async Task<PagedResult<AuditoriaResumo>> BuscarAuditoriaAsync(
+        string? usuario,
+        string? recurso,
+        int? pagina,
+        int? tamanhoPagina,
+        CancellationToken cancellationToken = default)
+    {
+        var (p, tamanho) = Paginacao.Normalizar(pagina, tamanhoPagina);
+
+        var resultado = await auditoria.BuscarAsync(usuario, recurso, p, tamanho, cancellationToken);
+
+        return new PagedResult<AuditoriaResumo>(
+            resultado.Itens.Select(r => r.ParaResumo()).ToList(),
+            resultado.Pagina,
+            resultado.TamanhoPagina,
+            resultado.TotalItens);
+    }
+
     public async Task<Metricas> ObterMetricasAsync(CancellationToken cancellationToken = default)
     {
         var porStatus = await eventos.ContarPorStatusAsync(cancellationToken);
@@ -96,7 +149,10 @@ public sealed class ConsultaService(
             pendentes,
             sucesso,
             erro,
+            porStatus.TryGetValue(StatusProcessamento.AguardandoRetentativa, out var retentando) ? retentando : 0,
             fila.Aguardando,
+            await outbox.ContarPendentesAsync(cancellationToken),
+            await deadLetters.ContarPendentesAsync(cancellationToken),
             porStatus.ToDictionary(par => par.Key.ToString(), par => par.Value));
     }
 

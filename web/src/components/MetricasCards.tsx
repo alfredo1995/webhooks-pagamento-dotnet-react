@@ -5,11 +5,17 @@ interface Props {
 }
 
 export function MetricasCards({ metricas }: Props) {
+  // "Em retentativa" e "Na dead-letter" contam a mesma historia em dois tempos:
+  // o que o sistema ainda esta tentando resolver sozinho e o que ja desistiu e
+  // espera decisao humana. Sem separar os dois, um numero de erros crescente
+  // nao diria se o problema esta piorando ou se resolvendo.
   const cartoes = [
     { rotulo: 'Eventos recebidos', valor: metricas?.total, tom: 'neutro' },
     { rotulo: 'Processados', valor: metricas?.sucesso, tom: 'sucesso' },
     { rotulo: 'Com erro', valor: metricas?.erro, tom: 'erro' },
-    { rotulo: 'Pendentes', valor: metricas?.pendentes, tom: 'pendente' },
+    { rotulo: 'Em retentativa', valor: metricas?.emRetentativa, tom: 'pendente' },
+    { rotulo: 'Na dead-letter', valor: metricas?.deadLetters, tom: 'erro' },
+    { rotulo: 'Pendentes', valor: metricas?.pendentes, tom: 'neutro' },
     { rotulo: 'Aguardando na fila', valor: metricas?.naFila, tom: 'fila' },
   ] as const
 

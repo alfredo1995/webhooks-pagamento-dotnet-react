@@ -9,7 +9,7 @@ namespace Sabemi.Pagamentos.IntegrationTests;
 /// <summary>Endpoints de leitura que alimentam o painel administrativo.</summary>
 public class PainelEndpointTests(ApiFactory fabrica) : IClassFixture<ApiFactory>, IAsyncLifetime
 {
-    private readonly HttpClient _cliente = fabrica.CreateClient();
+    private readonly HttpClient _cliente = fabrica.CriarClienteDoPainel(ApiFactory.Administrador);
 
     public async Task InitializeAsync()
     {

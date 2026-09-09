@@ -1,8 +1,9 @@
 using FluentValidation;
 using Microsoft.Extensions.Logging;
-using Sabemi.Pagamentos.Application.Processamento;
+using Sabemi.Pagamentos.Application.Observabilidade;
 using Sabemi.Pagamentos.Domain.Common;
 using Sabemi.Pagamentos.Domain.Eventos;
+using Sabemi.Pagamentos.Domain.Outbox;
 
 namespace Sabemi.Pagamentos.Application.Webhooks;
 
@@ -17,20 +18,28 @@ public interface IRecebimentoWebhookService
 
 /// <summary>
 /// Recebe a notificacao do banco, garante idempotencia e devolve o controle
-/// rapidamente: o trabalho pesado sai daqui pela fila.
+/// rapidamente: o trabalho pesado sai daqui pelo outbox.
 /// </summary>
 /// <remarks>
+/// <para>
 /// A idempotencia tem duas camadas. A consulta previa resolve o caso comum (o
 /// banco reenviando por timeout) sem custo de excecao; o indice unico em
 /// <c>IdTransacao</c> resolve o caso real de corrida, quando duas entregas da
 /// mesma transacao chegam ao mesmo tempo e as duas passam pela consulta antes de
 /// qualquer uma gravar. Sem o indice, a checagem sozinha seria apenas uma
 /// otimizacao com aparencia de garantia.
+/// </para>
+/// <para>
+/// O evento e a mensagem de outbox sao gravados no mesmo <c>SaveChanges</c>, ou
+/// seja, na mesma transacao. Publicar direto na fila aqui abriria a fresta
+/// classica: mensagem entregue e commit desfeito depois, ou commit feito e
+/// publicacao perdida. Com o outbox, so existe um desfecho — os dois ou nenhum.
+/// </para>
 /// </remarks>
 public sealed partial class RecebimentoWebhookService(
     IEventoWebhookRepository eventos,
+    IOutboxRepository outbox,
     IUnitOfWork unitOfWork,
-    IFilaProcessamento fila,
     IValidator<PagamentoWebhookRequest> validador,
     ILogger<RecebimentoWebhookService> logger) : IRecebimentoWebhookService
 {
@@ -54,6 +63,7 @@ public sealed partial class RecebimentoWebhookService(
             if (existente is not null)
             {
                 LogDuplicado(logger, idTransacao, existente.Status.ToString());
+                ContarRecebimento(parceiro, "duplicado");
 
                 return new RespostaRecebimento(
                     ResultadoRecebimento.Duplicado,
@@ -79,8 +89,13 @@ public sealed partial class RecebimentoWebhookService(
 
             evento.MarcarInvalido(string.Join(" | ", erros.SelectMany(e => e.Value)));
 
-            await PersistirAsync(evento, cancellationToken);
+            // Payload invalido nao gera mensagem de outbox: reprocessar um corpo
+            // que ja foi reprovado pela validacao daria exatamente o mesmo erro.
+            await eventos.AdicionarAsync(evento, cancellationToken);
+            await PersistirAsync(cancellationToken);
+
             LogInvalido(logger, evento.IdTransacao, evento.MotivoFalha ?? string.Empty);
+            ContarRecebimento(parceiro, "invalido");
 
             return new RespostaRecebimento(
                 ResultadoRecebimento.Invalido,
@@ -97,12 +112,19 @@ public sealed partial class RecebimentoWebhookService(
             payload.DataPagamento!.Value.ToUniversalTime(),
             statusPagamento);
 
-        var duplicadoNaGravacao = await PersistirAsync(evento, cancellationToken);
-        if (duplicadoNaGravacao)
+        var (traceParent, traceState) = Telemetria.ContextoAtual();
+
+        await eventos.AdicionarAsync(evento, cancellationToken);
+        await outbox.AdicionarAsync(
+            MensagemOutbox.ParaEventoRecebido(evento.Id, traceParent, traceState),
+            cancellationToken);
+
+        if (!await PersistirAsync(cancellationToken))
         {
             var existente = await eventos.ObterPorTransacaoAsync(evento.IdTransacao, cancellationToken);
 
             LogCorridaDetectada(logger, evento.IdTransacao);
+            ContarRecebimento(parceiro, "duplicado");
 
             return new RespostaRecebimento(
                 ResultadoRecebimento.Duplicado,
@@ -111,10 +133,8 @@ public sealed partial class RecebimentoWebhookService(
                 "Transacao recebida simultaneamente por outra requisicao. Nenhum reprocessamento foi disparado.");
         }
 
-        // A fila e o ponto em que a requisicao se despede do trabalho pesado.
-        await fila.EnfileirarAsync(evento.Id, cancellationToken);
-
         LogAceito(logger, evento.IdTransacao, evento.IdContrato ?? "-");
+        ContarRecebimento(parceiro, "aceito");
 
         return new RespostaRecebimento(
             ResultadoRecebimento.Aceito,
@@ -123,22 +143,26 @@ public sealed partial class RecebimentoWebhookService(
             "Evento aceito e enfileirado para processamento.");
     }
 
-    /// <summary>Grava o evento. Devolve <c>true</c> quando o indice unico acusou duplicidade.</summary>
-    private async Task<bool> PersistirAsync(EventoWebhook evento, CancellationToken cancellationToken)
+    /// <summary>Grava o que estiver pendente. Devolve <c>false</c> quando o indice unico acusou duplicidade.</summary>
+    private async Task<bool> PersistirAsync(CancellationToken cancellationToken)
     {
-        await eventos.AdicionarAsync(evento, cancellationToken);
-
         try
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
-            return false;
+            return true;
         }
         catch (TransacaoDuplicadaException)
         {
-            return true;
+            return false;
         }
     }
+
+    private static void ContarRecebimento(string parceiro, string resultado)
+        => Telemetria.EventosRecebidos.Add(
+            1,
+            new KeyValuePair<string, object?>("parceiro", parceiro),
+            new KeyValuePair<string, object?>("resultado", resultado));
 
     [LoggerMessage(EventId = 1001, Level = LogLevel.Information,
         Message = "Webhook aceito. id_transacao={IdTransacao} id_contrato={IdContrato}")]

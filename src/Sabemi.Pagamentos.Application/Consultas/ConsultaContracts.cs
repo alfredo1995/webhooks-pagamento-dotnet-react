@@ -1,3 +1,4 @@
+using Sabemi.Pagamentos.Domain.Auditoria;
 using Sabemi.Pagamentos.Domain.Contratos;
 using Sabemi.Pagamentos.Domain.Eventos;
 
@@ -14,6 +15,7 @@ public sealed record EventoResumo(
     string Resultado,
     string? MotivoFalha,
     int Tentativas,
+    DateTime? ProximaTentativaEmUtc,
     string OrigemParceiro,
     DateTime RecebidoEmUtc,
     DateTime? ProcessadoEmUtc,
@@ -33,12 +35,39 @@ public sealed record ContratoResumo(
     DateTime? UltimoPagamentoUtc,
     DateTime AtualizadoEmUtc);
 
+public sealed record DeadLetterResumo(
+    Guid Id,
+    Guid EventoId,
+    string IdTransacao,
+    string? IdContrato,
+    string Motivo,
+    int Tentativas,
+    DateTime CriadoEmUtc,
+    DateTime? ReprocessadoEmUtc,
+    string? ReprocessadoPor,
+    bool Pendente);
+
+public sealed record AuditoriaResumo(
+    Guid Id,
+    string Usuario,
+    string Papel,
+    string Metodo,
+    string Recurso,
+    string? Consulta,
+    string IpOrigem,
+    int StatusHttp,
+    string? TraceId,
+    DateTime EmUtc);
+
 public sealed record Metricas(
     int Total,
     int Pendentes,
     int Sucesso,
     int Erro,
+    int EmRetentativa,
     int NaFila,
+    int OutboxPendente,
+    int DeadLetters,
     IReadOnlyDictionary<string, int> PorStatus);
 
 public static class ConsultaMapper
@@ -58,6 +87,7 @@ public static class ConsultaMapper
             evento.Status.ParaResultado().ToString(),
             evento.MotivoFalha,
             evento.Tentativas,
+            evento.ProximaTentativaEmUtc,
             evento.OrigemParceiro,
             evento.RecebidoEmUtc,
             evento.ProcessadoEmUtc,
@@ -79,5 +109,39 @@ public static class ConsultaMapper
             contrato.UltimaTransacao,
             contrato.UltimoPagamentoUtc,
             contrato.AtualizadoEmUtc);
+    }
+
+    public static DeadLetterResumo ParaResumo(this DeadLetter carta)
+    {
+        ArgumentNullException.ThrowIfNull(carta);
+
+        return new DeadLetterResumo(
+            carta.Id,
+            carta.EventoId,
+            carta.IdTransacao,
+            carta.IdContrato,
+            carta.Motivo,
+            carta.Tentativas,
+            carta.CriadoEmUtc,
+            carta.ReprocessadoEmUtc,
+            carta.ReprocessadoPor,
+            carta.Pendente);
+    }
+
+    public static AuditoriaResumo ParaResumo(this RegistroAuditoria registro)
+    {
+        ArgumentNullException.ThrowIfNull(registro);
+
+        return new AuditoriaResumo(
+            registro.Id,
+            registro.Usuario,
+            registro.Papel,
+            registro.Metodo,
+            registro.Recurso,
+            registro.Consulta,
+            registro.IpOrigem,
+            registro.StatusHttp,
+            registro.TraceId,
+            registro.EmUtc);
     }
 }

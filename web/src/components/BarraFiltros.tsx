@@ -7,6 +7,8 @@ interface Props {
   aoAlternarAutoRefresh: (ativo: boolean) => void
   aoRecarregar: () => void
   atualizadoEm: string
+  /** Nas abas que nao listam eventos, os filtros de evento nao teriam efeito. */
+  somenteAtualizacao?: boolean
 }
 
 const opcoes: Array<{ valor: Resultado | 'Todos'; rotulo: string }> = [
@@ -23,6 +25,7 @@ export function BarraFiltros({
   aoAlternarAutoRefresh,
   aoRecarregar,
   atualizadoEm,
+  somenteAtualizacao = false,
 }: Props) {
   // Qualquer mudanca de filtro volta para a primeira pagina: manter a pagina 7
   // ao trocar de filtro quase sempre resulta em uma lista vazia sem explicacao.
@@ -31,6 +34,7 @@ export function BarraFiltros({
 
   return (
     <section className="filtros" aria-label="Filtros">
+      {!somenteAtualizacao && (
       <div className="filtros__grupo" role="group" aria-label="Filtrar por resultado">
         {opcoes.map((opcao) => (
           <button
@@ -44,7 +48,9 @@ export function BarraFiltros({
           </button>
         ))}
       </div>
+      )}
 
+      {!somenteAtualizacao && (
       <label className="campo">
         <span>ID do contrato</span>
         <input
@@ -54,7 +60,9 @@ export function BarraFiltros({
           onChange={(e) => alterar({ idContrato: e.target.value })}
         />
       </label>
+      )}
 
+      {!somenteAtualizacao && (
       <label className="campo">
         <span>ID da transação</span>
         <input
@@ -64,6 +72,7 @@ export function BarraFiltros({
           onChange={(e) => alterar({ idTransacao: e.target.value })}
         />
       </label>
+      )}
 
       <div className="filtros__acoes">
         <label className="toggle">

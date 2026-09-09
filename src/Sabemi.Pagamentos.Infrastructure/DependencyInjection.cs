@@ -2,12 +2,15 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Sabemi.Pagamentos.Application.Processamento;
+using Sabemi.Pagamentos.Domain.Auditoria;
 using Sabemi.Pagamentos.Domain.Common;
 using Sabemi.Pagamentos.Domain.Contratos;
 using Sabemi.Pagamentos.Domain.Eventos;
+using Sabemi.Pagamentos.Domain.Outbox;
 using Sabemi.Pagamentos.Infrastructure.Persistence;
 using Sabemi.Pagamentos.Infrastructure.Persistence.Repositories;
 using Sabemi.Pagamentos.Infrastructure.Processamento;
+using Sabemi.Pagamentos.Infrastructure.Processamento.RabbitMq;
 
 namespace Sabemi.Pagamentos.Infrastructure;
 
@@ -45,21 +48,48 @@ public static class DependencyInjection
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IEventoWebhookRepository, EventoWebhookRepository>();
         services.AddScoped<IStatusContratoRepository, StatusContratoRepository>();
+        services.AddScoped<IOutboxRepository, OutboxRepository>();
+        services.AddScoped<IDeadLetterRepository, DeadLetterRepository>();
+        services.AddScoped<IAuditoriaRepository, AuditoriaRepository>();
 
         return services;
     }
 
+    /// <summary>
+    /// Monta o pipeline assincrono: publicador do outbox, supervisor de reentrega
+    /// e o par fila/consumidor escolhido por configuracao.
+    /// </summary>
+    /// <remarks>
+    /// O provedor de fila e a unica decisao que muda entre "uma instancia" e
+    /// "varias instancias". Como o restante do pipeline fala apenas com
+    /// <see cref="IFilaProcessamento"/>, trocar <c>Memoria</c> por <c>RabbitMq</c>
+    /// nao altera nenhum caso de uso.
+    /// </remarks>
     public static IServiceCollection AddProcessamento(this IServiceCollection services, IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        services.Configure<OpcoesProcessamento>(configuration.GetSection(OpcoesProcessamento.Secao));
+        var secao = configuration.GetSection(OpcoesProcessamento.Secao);
+        services.Configure<OpcoesProcessamento>(secao);
 
-        // A fila e singleton: e o ponto de encontro entre a borda HTTP e o worker.
-        services.AddSingleton<FilaProcessamentoEmMemoria>();
-        services.AddSingleton<IFilaProcessamento>(sp => sp.GetRequiredService<FilaProcessamentoEmMemoria>());
-        services.AddHostedService<WorkerProcessamento>();
+        if (secao.GetValue("Fila", ProvedorFila.Memoria) == ProvedorFila.RabbitMq)
+        {
+            services.AddSingleton<ConexaoRabbitMq>();
+            services.AddSingleton<FilaProcessamentoRabbitMq>();
+            services.AddSingleton<IFilaProcessamento>(sp => sp.GetRequiredService<FilaProcessamentoRabbitMq>());
+            services.AddHostedService<ConsumidorRabbitMq>();
+        }
+        else
+        {
+            // A fila e singleton: e o ponto de encontro entre o publicador e o worker.
+            services.AddSingleton<FilaProcessamentoEmMemoria>();
+            services.AddSingleton<IFilaProcessamento>(sp => sp.GetRequiredService<FilaProcessamentoEmMemoria>());
+            services.AddHostedService<WorkerProcessamento>();
+        }
+
+        services.AddHostedService<PublicadorOutbox>();
+        services.AddHostedService<SupervisorReentrega>();
 
         return services;
     }

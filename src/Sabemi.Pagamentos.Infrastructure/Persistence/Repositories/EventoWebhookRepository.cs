@@ -28,14 +28,64 @@ public sealed class EventoWebhookRepository(AppDbContext context) : IEventoWebho
     public async Task AdicionarAsync(EventoWebhook evento, CancellationToken cancellationToken = default)
         => await context.EventosWebhook.AddAsync(evento, cancellationToken);
 
-    public async Task<IReadOnlyList<Guid>> ObterPendentesAsync(int limite, CancellationToken cancellationToken = default)
-        => await context.EventosWebhook
+    /// <summary>
+    /// UPDATE condicional: o banco decide quem reivindica.
+    /// </summary>
+    /// <remarks>
+    /// As condicoes e as atribuicoes espelham <see cref="EventoWebhook.Reivindicar"/>
+    /// — o dominio define a regra, aqui ela vira uma operacao atomica. Qualquer
+    /// entrega fora das tres portas de entrada afeta zero linhas e e descartada
+    /// pelo consumidor, que e como a reentrega do broker deixa de virar
+    /// processamento em duplicidade.
+    /// </remarks>
+    public async Task<EventoWebhook?> ReivindicarAsync(
+        Guid id,
+        DateTime agoraUtc,
+        TimeSpan lease,
+        CancellationToken cancellationToken = default)
+    {
+        var limiteLease = agoraUtc - lease;
+
+        var afetadas = await context.EventosWebhook
+            .Where(e => e.Id == id)
+            .Where(e =>
+                e.Status == StatusProcessamento.Recebido
+                || (e.Status == StatusProcessamento.AguardandoRetentativa
+                    && (e.ProximaTentativaEmUtc == null || e.ProximaTentativaEmUtc <= agoraUtc))
+                || (e.Status == StatusProcessamento.Processando
+                    && (e.ReivindicadoEmUtc == null || e.ReivindicadoEmUtc <= limiteLease)))
+            .ExecuteUpdateAsync(
+                atualizacao => atualizacao
+                    .SetProperty(e => e.Status, StatusProcessamento.Processando)
+                    .SetProperty(e => e.Tentativas, e => e.Tentativas + 1)
+                    .SetProperty(e => e.ReivindicadoEmUtc, agoraUtc),
+                cancellationToken);
+
+        return afetadas == 0 ? null : await ObterPorIdAsync(id, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Guid>> ObterElegiveisParaReentregaAsync(
+        DateTime agoraUtc,
+        TimeSpan lease,
+        int limite,
+        CancellationToken cancellationToken = default)
+    {
+        var limiteLease = agoraUtc - lease;
+
+        return await context.EventosWebhook
             .AsNoTracking()
-            .Where(e => e.Status == StatusProcessamento.Recebido || e.Status == StatusProcessamento.Processando)
+            .Where(e =>
+                (e.Status == StatusProcessamento.AguardandoRetentativa
+                    && e.ProximaTentativaEmUtc != null
+                    && e.ProximaTentativaEmUtc <= agoraUtc)
+                || (e.Status == StatusProcessamento.Processando
+                    && (e.ReivindicadoEmUtc == null || e.ReivindicadoEmUtc <= limiteLease))
+                || (e.Status == StatusProcessamento.Recebido && e.RecebidoEmUtc <= limiteLease))
             .OrderBy(e => e.RecebidoEmUtc)
             .Take(limite)
             .Select(e => e.Id)
             .ToListAsync(cancellationToken);
+    }
 
     public async Task<PagedResult<EventoWebhook>> BuscarAsync(
         ResultadoEvento? resultado,

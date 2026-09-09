@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Sabemi.Pagamentos.Application.Consultas;
 using Sabemi.Pagamentos.Domain.Common;
@@ -8,6 +9,7 @@ namespace Sabemi.Pagamentos.Api.Controllers;
 [ApiController]
 [Route("api/eventos")]
 [Produces("application/json")]
+[Authorize]
 public sealed class EventosController(IConsultaService consultas) : ControllerBase
 {
     /// <summary>Lista os eventos recebidos, do mais recente para o mais antigo.</summary>

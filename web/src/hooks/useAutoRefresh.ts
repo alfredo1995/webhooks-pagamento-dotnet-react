@@ -10,15 +10,22 @@ interface Estado<T> {
 /**
  * Busca dados e reexecuta em intervalo fixo.
  *
- * Dois cuidados que a versao ingenua deste hook nao tem: a requisicao anterior e
- * abortada antes de disparar a proxima, para que uma resposta lenta nao sobrescreva
- * uma recente; e o `carregando` so aparece na primeira carga, senao a tabela
- * piscaria a cada ciclo de atualizacao.
+ * Três cuidados que a versao ingenua deste hook nao tem. A requisicao anterior e
+ * abortada antes de disparar a proxima, para que uma resposta lenta nao
+ * sobrescreva uma recente. O `carregando` so aparece na primeira carga, senao a
+ * tabela piscaria a cada ciclo de atualizacao.
+ *
+ * E `habilitado` e separado de `ativo` de proposito: `ativo` decide se o
+ * intervalo roda — e o botao de pausa —, enquanto `habilitado` decide se a
+ * consulta deve existir. Sem essa separacao, uma aba invisivel ainda faria a
+ * primeira busca; foi assim que o painel do operador chegava a pedir a trilha de
+ * auditoria e exibia o 403 como se a API estivesse fora do ar.
  */
 export function useAutoRefresh<T>(
   buscar: (signal: AbortSignal) => Promise<T>,
   intervaloMs: number,
   ativo: boolean,
+  habilitado = true,
 ): Estado<T> & { recarregar: () => void } {
   const [estado, setEstado] = useState<Estado<T>>({
     dados: null,
@@ -31,7 +38,14 @@ export function useAutoRefresh<T>(
   const buscarRef = useRef(buscar)
   buscarRef.current = buscar
 
+  const habilitadoRef = useRef(habilitado)
+  habilitadoRef.current = habilitado
+
   const executar = useCallback(async () => {
+    if (!habilitadoRef.current) {
+      return
+    }
+
     controllerRef.current?.abort()
 
     const controller = new AbortController()
@@ -55,6 +69,10 @@ export function useAutoRefresh<T>(
   }, [])
 
   useEffect(() => {
+    if (!habilitado) {
+      return
+    }
+
     void executar()
 
     if (!ativo) {
@@ -64,7 +82,7 @@ export function useAutoRefresh<T>(
     const timer = window.setInterval(() => void executar(), intervaloMs)
 
     return () => window.clearInterval(timer)
-  }, [executar, intervaloMs, ativo])
+  }, [executar, intervaloMs, ativo, habilitado])
 
   useEffect(() => () => controllerRef.current?.abort(), [])
 
