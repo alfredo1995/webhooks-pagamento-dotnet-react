@@ -52,12 +52,18 @@ docker compose up --build
 Sobe SQL Server, RabbitMQ, Jaeger, API e painel. As migrations são aplicadas no
 startup.
 
-Nenhuma senha está escrita no `docker-compose.yml`: todas vêm do `.env`, e as
-chaves obrigatórias são declaradas com `${VAR:?}` — sem o arquivo, o compose
-recusa a subir em vez de silenciosamente usar um valor em branco. O
-`.env.example` documenta cada chave e é o único dos dois que vai para o
-repositório. Em produção nada disso vira arquivo: as mesmas variáveis saem de um
-cofre (Key Vault, Secrets Manager) injetado no ambiente.
+**Nenhum segredo está em arquivo versionado** — nem no `docker-compose.yml`, nem
+no `appsettings.json`, que declara as chaves sem valor de propósito. Todas vêm do
+`.env`, e as obrigatórias são declaradas com `${VAR:?}`: sem o arquivo, o compose
+recusa a subir em vez de seguir com valor em branco. O `.env.example` documenta
+cada chave e é o único dos dois que vai para o repositório. Em produção nada
+disso vira arquivo: as mesmas variáveis saem de um cofre (Key Vault, Secrets
+Manager) injetado no ambiente.
+
+A API também valida a configuração no `ValidateOnStart`. Um segredo faltando
+derruba a subida dizendo **qual chave** falta e **onde defini-la**, em vez de
+deixar a aplicação de pé para falhar depois, longe da causa — o login estourando
+ao assinar com chave vazia, ou o parceiro tomando `401` sem motivo aparente.
 
 | Variável | O que alimenta |
 | --- | --- |
@@ -104,11 +110,17 @@ embutida no script, girar o segredo devolveria `401` sem nenhuma pista do motivo
 
 ### Desenvolvimento local
 
+Fora do compose ninguém injeta as variáveis, então os segredos entram pelo
+*user-secrets* do .NET — que grava fora da árvore do projeto e por isso não tem
+como vazar em commit. Um script carrega os valores do `.env`:
+
 ```bash
-docker compose up -d sqlserver          # só o banco
+./tools/configurar-segredos-locais.sh    # ou .ps1 no Windows
+
+docker compose up -d sqlserver           # só o banco
 dotnet run --project src/Sabemi.Pagamentos.Api
 
-cd web && npm install && npm run dev    # painel em http://localhost:5173
+cd web && npm install && npm run dev     # painel em http://localhost:5173
 ```
 
 Sem RabbitMQ no ar, o padrão do `appsettings.json` é a fila em memória
@@ -628,11 +640,11 @@ forçar um a usar a convenção do outro.
 
 ## Testes
 
-**125 testes, todos verdes.**
+**131 testes, todos verdes.**
 
 ```
 Sabemi.Pagamentos.UnitTests ......... 84
-Sabemi.Pagamentos.IntegrationTests .. 41
+Sabemi.Pagamentos.IntegrationTests .. 47
 ```
 
 ### Unitários
@@ -746,7 +758,7 @@ sabemi-webhooks/
 │       └── Middleware/                     # ProblemDetails
 ├── web/                                    # Painel React + TypeScript + Vite
 ├── tests/
-├── tools/                                  # Scripts de envio assinado
+├── tools/                                  # Envio assinado e carga dos segredos locais
 ├── .github/workflows/ci.yml
 ├── .env.example                            # Modelo das senhas e segredos (versionado)
 ├── .env                                    # Valores reais — fora do git
@@ -762,12 +774,11 @@ Deixados de propósito, porque cada um merece uma decisão de arquitetura própr
 não um `TODO`:
 
 - **Cofre de segredos.** ApiKey, segredo HMAC, senhas e chave de assinatura do JWT
-  saem do `.env`, que não é versionado — o suficiente para o segredo não morar no
-  repositório, longe do suficiente de um cofre. Em produção viriam de Key Vault ou
-  Secrets Manager, com rotação automatizada: a janela de duas chaves já está
-  pronta para isso. O `appsettings.json` ainda carrega os valores de
-  desenvolvimento como padrão do `dotnet run`; num ambiente real esses campos
-  ficariam vazios e o preenchimento viria só do ambiente.
+  já não moram em nenhum arquivo versionado: vêm do `.env` no compose ou do
+  user-secrets no desenvolvimento local, e a subida falha se algum faltar. Isso
+  ainda não é um cofre — falta rotação automatizada, versionamento e trilha de
+  quem leu o segredo, que é o que Key Vault ou Secrets Manager entregam. A janela
+  de duas chaves já está pronta para essa rotação.
 - **Circuit breaker por dependência.** O backoff protege o evento; não protege a
   dependência de continuar recebendo carga enquanto está caindo.
 - **Particionamento e retenção do log de eventos.** A tabela cresce para sempre.

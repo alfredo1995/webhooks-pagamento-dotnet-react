@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Sabemi.Pagamentos.Api.Auditoria;
@@ -75,8 +76,20 @@ builder.Services.AddSwaggerGen(options =>
     }
 });
 
-builder.Services.Configure<OpcoesWebhook>(builder.Configuration.GetSection(OpcoesWebhook.Secao));
-builder.Services.Configure<OpcoesAutenticacao>(builder.Configuration.GetSection(OpcoesAutenticacao.Secao));
+// Os segredos nao moram no appsettings: vem do .env (compose) ou do user-secrets.
+// ValidateOnStart faz a ausencia estourar no deploy, com o nome da chave que
+// falta, em vez de virar 401 sem explicacao na primeira requisicao do parceiro.
+builder.Services.AddOptions<OpcoesWebhook>()
+    .Bind(builder.Configuration.GetSection(OpcoesWebhook.Secao))
+    .ValidateOnStart();
+
+builder.Services.AddOptions<OpcoesAutenticacao>()
+    .Bind(builder.Configuration.GetSection(OpcoesAutenticacao.Secao))
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<IValidateOptions<OpcoesWebhook>, ValidacaoOpcoesWebhook>();
+builder.Services.AddSingleton<IValidateOptions<OpcoesAutenticacao>, ValidacaoOpcoesAutenticacao>();
+
 builder.Services.Configure<OpcoesAuditoria>(builder.Configuration.GetSection(OpcoesAuditoria.Secao));
 builder.Services.AddScoped<AutenticacaoWebhookFilter>();
 builder.Services.AddSingleton<IServicoTokenJwt, ServicoTokenJwt>();

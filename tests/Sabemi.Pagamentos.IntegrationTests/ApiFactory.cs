@@ -103,6 +103,12 @@ public class ApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Processamento:Retentativa:MaximoTentativas", "1");
         builder.UseSetting("Processamento:Retentativa:JitterPercentual", "0");
 
+        // O provider e trocado por SQLite logo abaixo, mas AddInfrastructure le a
+        // connection string na composicao do container e recusa string vazia — e
+        // vazia e o que o appsettings versionado traz, de proposito. Um valor
+        // qualquer aqui satisfaz a checagem sem nunca ser usado para abrir conexao.
+        builder.UseSetting("ConnectionStrings:SqlServer", "Server=trocado-por-sqlite;Database=testes");
+
         builder.UseSetting("Webhook:ExigirAssinatura", "true");
         builder.UseSetting("Webhook:Parceiros:0:Nome", Parceiro);
         builder.UseSetting("Webhook:Parceiros:0:ApiKey", ApiKey);

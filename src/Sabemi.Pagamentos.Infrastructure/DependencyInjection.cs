@@ -27,8 +27,17 @@ public static class DependencyInjection
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var connectionString = configuration.GetConnectionString(NomeConnectionString)
-            ?? throw new InvalidOperationException($"Connection string '{NomeConnectionString}' nao configurada.");
+        // Vazia e o caso comum, nao nula: o appsettings declara a chave sem valor
+        // justamente para nao versionar a senha do banco. Checar so por null
+        // deixaria a string vazia chegar ao provider e falhar la, com uma
+        // mensagem que nao diz o que fazer.
+        var connectionString = configuration.GetConnectionString(NomeConnectionString);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw new InvalidOperationException(
+                $"Connection string '{NomeConnectionString}' nao configurada. Defina MSSQL_SA_PASSWORD "
+                + "no .env (compose) ou rode ./tools/configurar-segredos-locais.sh para o dotnet run local.");
+        }
 
         services.AddDbContext<AppDbContext>(options =>
             options.UseSqlServer(connectionString, sql =>
