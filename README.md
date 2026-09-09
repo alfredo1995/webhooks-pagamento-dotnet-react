@@ -1,3 +1,6 @@
+<img width="1568" height="669" alt="sabemi-webhooks-demo" src="https://github.com/user-attachments/assets/e147ed8f-e4f8-4293-9f58-c398cdc8d40b" />
+
+
 # Webhooks de Pagamento — .NET 8 + React
 
 Serviço que recebe notificações de pagamento de um banco parceiro, garante que a
